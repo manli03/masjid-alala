@@ -47,15 +47,20 @@ checksum and signing-certificate checks.
 
 ## Behavior and security
 
-- Automatic checks happen after startup and when returning to the app, with a
-  six-hour successful-check interval and a 15-minute retry delay after errors.
-  The first check starts three seconds after the app is revealed. Home's download
-  icon performs a manual check, bypasses the reminder/check intervals, and reports
-  the installed version or the actual check error when no offer can be displayed.
-- Automatic download prompts appear at most once per device-local calendar day.
-  Download consent includes automatically opening Android's installer after verification.
-  Cancelled installation is retried automatically at most once per day; manual checks
-  and the progress panel's Install button bypass this delay.
+- Automatic checks start immediately after the dynamic splash is dismissed, and
+  on every foreground entry. There are no daily reminder, six-hour check, or
+  failure cooldown limits. Choosing Later does not suppress the next opening's
+  check. Home's download icon checks immediately and reports the installed version
+  or the actual check error when no offer can be displayed.
+- The original dynamic splash shows the cached remote image and refreshes it in
+  the background, with bundled portrait/landscape images as fallback. Normal Home
+  launches retain its three-second display; app links skip that minimum. Native
+  splash hiding reveals the dynamic splash instead of covering it until startup ends.
+- Download consent includes automatically opening Android's installer after verification.
+  A downloaded version is handed to the installer automatically once; cancelling
+  keeps it ready for the Install button, without an automatic installer/resume loop.
+  Only download status is polled; idle polling does not repeatedly fetch releases
+  or reopen the offer while a user stays on a page.
 - Downloads only start after consent. Android DownloadManager maintains downloads
   while the app is closed; saved download IDs restore status on reopening. No
   installation screen is opened while the app is in the background.
@@ -63,13 +68,21 @@ checksum and signing-certificate checks.
   installation handoff, and failure details on every screen. It can be minimized.
   DownloadManager also displays download notifications. Completed downloads are verified
   when the app next checks, then the system installer opens automatically in the foreground.
-  Invalid downloads display an error immediately, even if today's download reminder was shown.
+  Invalid downloads display an error immediately.
 - APK size, SHA-256, package ID, Android compatibility, version code/name, and current
   signing certificate are checked before installation. The checksum is checked again
   immediately before handing the file to Android's installer. Certificate rotation
   is intentionally rejected and needs a separate migration plan.
 - The updater's metadata HTTP client explicitly restores TLS chain and DNS checks,
   because this project includes `ssl-skip`, which alters global HTTPS defaults.
+- Before download, the updater reads the server metadata, checks the package ID,
+  single/universal APK format, higher native version code and Android compatibility,
+  then fetches the latest GitHub release. The release must be stable and its tag
+  must match the metadata version. It checks that the named APK is uploaded, its
+  SHA-256 digest and size exist, and its URL belongs to the allowed repository.
+  After consent, available storage is checked before DownloadManager starts.
+  APK hashing, archive parsing, and certificate comparison happen after download,
+  not while discovering a new release.
 - Android may require “Allow from this source” permission. The app explains this
   only after the user chooses Install, and continues when returning from Settings.
   Android always controls the final installation confirmation. Cancelling keeps
@@ -105,7 +118,8 @@ native version. A 1.3.1 / version code 10 test APK cannot be offered that same r
 
 Use two signed builds with the same key and increasing version codes. Verify:
 
-- Declining download; once-daily reminder; manual check bypass; no update available.
+- Declining download; checking again on the next opening; immediate post-splash
+  check; manual check; no update available; metadata/GitHub version mismatch.
 - Progress, airplane-mode pause/recovery, insufficient storage, closing/reopening.
 - Complete download while backgrounded; verify and open installer upon foregrounding.
 - Cancelling the Android installer; returning later; using the manual Install button.

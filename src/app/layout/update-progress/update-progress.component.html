@@ -1,5 +1,6 @@
 <ng-container *ngIf="updater.download$ | async as download">
-  <section *ngIf="updater.supported && download.state !== 'idle'" class="update-panel" aria-label="Kemas kini aplikasi">
+  <section *ngIf="updater.supported && download.state !== 'idle' &&
+    (download.state !== 'failed' || dismissedFailure !== failureKey(download))" class="update-panel" aria-label="Kemas kini aplikasi">
     <div class="panel-header">
       <span class="update-icon" [class.failed]="download.state === 'failed'" aria-hidden="true">
         <ion-icon [name]="download.state === 'failed' ? 'alert-circle-outline' : download.state === 'ready' ? 'checkmark-circle-outline' : 'cloud-download-outline'"></ion-icon>
@@ -15,6 +16,8 @@
         [attr.aria-expanded]="!collapsed" aria-controls="update-details">
         {{ collapsed ? 'Lihat' : 'Kecilkan' }}
       </ion-button>
+      <ion-button *ngIf="download.state === 'failed'" fill="clear" size="small"
+        (click)="dismissFailure(download)" aria-label="Tutup mesej kemas kini gagal">Tutup</ion-button>
     </div>
     <ion-progress-bar *ngIf="download.state === 'downloading' || download.state === 'paused' || download.state === 'verifying' || download.state === 'installing'"
       [type]="download.state === 'verifying' || download.state === 'installing' || !download.total ? 'indeterminate' : 'determinate'"

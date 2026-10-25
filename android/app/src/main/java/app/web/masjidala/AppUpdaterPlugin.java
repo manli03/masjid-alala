@@ -158,6 +158,10 @@ public class AppUpdaterPlugin extends Plugin {
                 throw new Exception("This release requires a newer Android version");
             JSONObject release = json("https://api.github.com/repos/" + repository + "/releases/latest");
             if (release.optBoolean("draft") || release.optBoolean("prerelease")) throw new Exception("Release is not stable");
+            String releaseVersion = release.optString("tag_name").replaceFirst("^[vV]", "");
+            if (!element.getString("versionName").equals(releaseVersion))
+                throw new Exception("Versi pelayan (" + element.getString("versionName") +
+                    ") tidak sepadan dengan keluaran GitHub (" + releaseVersion + "). Sila hubungi pentadbir aplikasi.");
             JSONArray assets = release.getJSONArray("assets");
             JSONObject apkAsset = asset(assets, element.getString("outputFile"));
             String digest = apkAsset.optString("digest");

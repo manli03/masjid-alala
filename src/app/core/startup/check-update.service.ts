@@ -16,8 +16,13 @@ export class CheckUpdateService implements OnDestroy {
   private listener?: PluginListenerHandle;
   private progressListener?: PluginListenerHandle;
   private awaitingPermission = false;
-  private lastCheck = 0;
-  private readonly reminderKey = 'app-update-last-prompt';
+  private attemptActive = false;
+
+  private publishDownload(download: UpdateDownload): void {
+    if (download.state === 'downloading' || download.state === 'installing') this.attemptActive = true;
+    this.download$.next(download.state === 'failed' && !this.attemptActive ? { state: 'idle' } : download);
+  }
+
 
   constructor(@Inject(APP_UPDATER) private native: AppUpdaterPlugin,
     @Inject(UPDATE_RUNTIME) private runtime: UpdateRuntime,
@@ -28,17 +33,17 @@ export class CheckUpdateService implements OnDestroy {
     this.started = true;
     try {
       this.progressListener = await this.native.addListener('downloadProgress', download => {
-        this.zone.run(() => this.download$.next(download));
+        this.zone.run(() => this.publishDownload(download));
       });
       this.listener = await this.runtime.app.addListener('appStateChange', ({ isActive }) => {
         this.zone.run(() => {
           this.active = isActive;
           clearTimeout(this.timer);
-          if (isActive) void this.tick();
+          if (isActive) void this.tick(true);
         });
       });
       this.active = (await this.runtime.app.getState()).isActive;
-      this.schedule(3000);
+      await this.tick(true);
     } catch (error) {
       this.started = false;
       void this.progressListener?.remove();
@@ -51,37 +56,39 @@ export class CheckUpdateService implements OnDestroy {
     if (this.started && this.active) this.timer = setTimeout(() => void this.tick(), delay);
   }
 
-  private async tick(): Promise<void> {
+  private async tick(checkRelease = false): Promise<void> {
     if (!this.active) return;
-    await this.checkForUpdate();
+    await this.performCheck(false, !checkRelease);
     const state = this.download$.value.state;
-    this.schedule(state === 'downloading' || state === 'paused' || state === 'verifying' ? 1000 : 60000);
+    if (state === 'downloading' || state === 'paused' || state === 'verifying') this.schedule(1000);
   }
 
-  async checkForUpdate(manual = false): Promise<void> {
+  checkForUpdate(manual = false): Promise<void> {
+    return this.performCheck(manual, false);
+  }
+
+  private async performCheck(manual: boolean, statusOnly: boolean): Promise<void> {
     if (!this.supported || this.busy || !this.active) return;
     this.busy = true;
     this.checking$.next(true);
     try {
       const download = await this.native.getDownload();
-      this.download$.next(download);
+      this.publishDownload(download);
       if (download.state === 'ready') {
         const shown = await this.runtime.preferences.get({ key: 'app-update-install-prompt' });
         if (this.awaitingPermission && this.active) {
           this.awaitingPermission = false;
           await this.installReady(true);
-        } else if (await this.mayPrompt(manual) ||
-          (this.active && shown.value !== String(download.versionCode))) {
+        } else if (manual || shown.value !== String(download.versionCode)) {
           // Download consent covers opening the system installer after verification.
           // Persist the attempt first so cancelling Android's installer does not reopen it.
           await this.runtime.preferences.set({ key: 'app-update-install-prompt', value: String(download.versionCode) });
-          await this.markPrompt();
           await this.installReady();
         }
         return;
       }
       if (download.state === 'downloading' || download.state === 'paused' || download.state === 'verifying' || download.state === 'installing') return;
-      if (download.state === 'failed') {
+      if (download.state === 'failed' && this.attemptActive) {
         const failureKey = `${download.versionCode}:${download.message}`;
         const lastFailure = await this.runtime.preferences.get({ key: 'app-update-last-failure' });
         if (this.active && (manual || lastFailure.value !== failureKey)) {
@@ -89,16 +96,9 @@ export class CheckUpdateService implements OnDestroy {
           await this.runtime.dialog.alert({ title: 'Muat Turun Gagal', message: download.message ||
             'Muat turun tidak dapat diselesaikan. Sila cuba lagi melalui Tetapan.' });
         }
-        if (!manual) return;
       }
-      // Limit public GitHub API requests on foreground polling and app resumes.
-      if (!manual && Date.now() - this.lastCheck < 6 * 60 * 60 * 1000) return;
-      const previous = await this.runtime.preferences.get({ key: 'app-update-last-check' });
-      if (!manual && Date.now() - Number(previous.value || 0) < 6 * 60 * 60 * 1000) return;
-      if (!(await this.mayPrompt(manual))) return;
+      if (statusOnly) return;
       const { release } = await this.native.getRelease();
-      this.lastCheck = Date.now();
-      await this.runtime.preferences.set({ key: 'app-update-last-check', value: String(this.lastCheck) });
       if (release && this.active) {
         await this.promptDownload(release);
       } else if (!release && manual && this.active) {
@@ -110,7 +110,6 @@ export class CheckUpdateService implements OnDestroy {
       }
     } catch (error) {
       console.warn('Update check failed:', error);
-      this.lastCheck = Date.now() - 6 * 60 * 60 * 1000 + 15 * 60 * 1000;
       if (manual && this.active) {
         const detail = error instanceof Error ? error.message : (error as { message?: string })?.message;
         await this.runtime.dialog.alert({ title: 'Semakan Gagal', message:
@@ -120,23 +119,12 @@ export class CheckUpdateService implements OnDestroy {
     } finally {
       this.busy = false;
       this.checking$.next(false);
-      if (manual || this.awaitingPermission) this.schedule(2000);
+      const state = this.download$.value.state;
+      if (state === 'downloading' || state === 'paused' || state === 'verifying') this.schedule(1000);
     }
   }
 
-  private async mayPrompt(manual: boolean): Promise<boolean> {
-    if (!this.active) return false;
-    if (manual) return true;
-    const { value } = await this.runtime.preferences.get({ key: this.reminderKey });
-    return value !== new Date().toDateString();
-  }
-
-  private markPrompt(): Promise<void> {
-    return this.runtime.preferences.set({ key: this.reminderKey, value: new Date().toDateString() });
-  }
-
   private async promptDownload(release: AppRelease): Promise<void> {
-    await this.markPrompt();
     const notes = summarizeReleaseNotes(release.notes);
     const { value } = await this.runtime.dialog.confirm({
       title: 'Kemas Kini Aplikasi Tersedia',
@@ -146,6 +134,8 @@ export class CheckUpdateService implements OnDestroy {
       okButtonTitle: 'Muat Turun', cancelButtonTitle: 'Kemudian',
     });
     if (!value || !this.active) return;
+    this.attemptActive = true;
+    this.download$.next({ state: 'idle' });
     try {
       await this.native.startDownload();
     } catch (error) {
@@ -158,16 +148,17 @@ export class CheckUpdateService implements OnDestroy {
       versionName: release.versionName, bytes: 0, total: release.size });
     await this.runtime.preferences.remove({ key: 'app-update-install-prompt' });
     await this.runtime.preferences.remove({ key: 'app-update-last-failure' });
-    this.schedule(2000);
+    this.schedule(1000);
   }
 
   private async installReady(returnedFromSettings = false): Promise<void> {
     if (!this.active) return;
+    this.attemptActive = true;
     try {
       await this.requestInstallation(returnedFromSettings);
     } catch (error) {
       this.awaitingPermission = false;
-      this.download$.next({ ...this.download$.value, state: 'ready',
+      this.download$.next({ ...this.download$.value, state: 'failed',
         message: 'Tidak dapat membuka pemasang Android. Sila cuba lagi.' });
       console.warn('Cannot install update:', error);
       if (this.active) await this.runtime.dialog.alert({ title: 'Pemasangan Gagal', message:

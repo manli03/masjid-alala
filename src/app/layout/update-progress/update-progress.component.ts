@@ -1,5 +1,6 @@
 import { CommonModule } from '@angular/common';
-import { Component } from '@angular/core';
+import { Component, OnDestroy } from '@angular/core';
+import { Subscription } from 'rxjs';
 import { IonicModule } from '@ionic/angular';
 import { CheckUpdateService } from '../../core/startup/check-update.service';
 import { UpdateDownload } from '../../core/startup/app-updater.plugin';
@@ -11,9 +12,25 @@ import { UpdateDownload } from '../../core/startup/app-updater.plugin';
   templateUrl: './update-progress.component.html',
   styleUrls: ['./update-progress.component.scss'],
 })
-export class UpdateProgressComponent {
+export class UpdateProgressComponent implements OnDestroy {
   collapsed = false;
-  constructor(public updater: CheckUpdateService) {}
+  dismissedFailure = '';
+  private subscription: Subscription;
+  constructor(public updater: CheckUpdateService) {
+    this.subscription = updater.download$.subscribe(download => {
+      if (download.state !== 'failed') this.dismissedFailure = '';
+    });
+  }
+
+  failureKey(download: UpdateDownload): string {
+    return JSON.stringify([download.versionCode, download.message]);
+  }
+
+  dismissFailure(download: UpdateDownload): void {
+    this.dismissedFailure = this.failureKey(download);
+  }
+
+  ngOnDestroy(): void { this.subscription.unsubscribe(); }
 
   progress(download: UpdateDownload): number {
     return download.total ? Math.max(0, Math.min(1, (download.bytes || 0) / download.total)) : 0;

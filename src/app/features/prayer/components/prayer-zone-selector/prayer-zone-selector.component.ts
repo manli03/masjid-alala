@@ -1,4 +1,6 @@
 import { Component, Input, OnInit } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { IonicModule } from '@ionic/angular';
 import { ModalController } from '@ionic/angular';
 import { PrayerTimesService } from '../../services/prayer-times.service';
 
@@ -14,11 +16,14 @@ interface PrayerZoneGroup {
 
 @Component({
   selector: 'app-prayer-zone-selector',
+  standalone: true,
+  imports: [CommonModule, IonicModule],
   templateUrl: './prayer-zone-selector.component.html',
   styleUrls: ['./prayer-zone-selector.component.scss'],
 })
 export class PrayerZoneSelectorComponent implements OnInit {
   @Input() currentZoneCode = '';
+  @Input() required = false;
 
   searchTerm = '';
   expandedState: string | null = null;

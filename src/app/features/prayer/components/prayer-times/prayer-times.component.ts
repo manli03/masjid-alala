@@ -47,6 +47,7 @@ export class PrayerTimesComponent implements OnInit, OnDestroy {
   isLoading: boolean = false;
   closestPrayerTime: any;
   sameData: boolean = false;
+  private readonly onZoneConfigured = () => { void this.initializePrayerTimes(); };
   private darkModeObserver?: MutationObserver;
 
   constructor(
@@ -56,6 +57,7 @@ export class PrayerTimesComponent implements OnInit, OnDestroy {
   ) {}
 
   async ngOnInit() {
+    window.addEventListener('prayerZoneConfigured', this.onZoneConfigured);
     // Load the schedule when the prayer tab opens.
     await this.initializePrayerTimes();
 
@@ -63,6 +65,7 @@ export class PrayerTimesComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() {
+    window.removeEventListener('prayerZoneConfigured', this.onZoneConfigured);
     this.setParentContentScrolling(true);
 
     // Stop the interval when the component is destroyed to prevent memory leaks

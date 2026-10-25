@@ -8,7 +8,6 @@ import { ToastService } from '../../core/feedback/toast.service';
 import { PrayerTimesService } from '../prayer/services/prayer-times.service';
 import { NotificationSettingsComponent } from '../prayer/components/notification-settings/notification-settings.component';
 import { PrayerZoneSelectorComponent } from '../prayer/components/prayer-zone-selector/prayer-zone-selector.component';
-import { CheckUpdateService } from '../../core/startup/check-update.service';
 
 @Component({
   selector: 'app-home',
@@ -35,6 +34,7 @@ export class HomePage implements OnDestroy {
   private retryTimeout: any;
   private defaultDataRequested = false;
   private dataRetryCount = 0;
+  private readonly onZoneConfigured = () => { void this.loadPrayerData(); };
   private prayerDateKey = '';
 
   constructor(
@@ -43,8 +43,7 @@ export class HomePage implements OnDestroy {
     private toastService: ToastService,
     private modalController: ModalController,
     public dailyWisdom: DailyWisdomService,
-    public updater: CheckUpdateService,
-  ) {}
+  ) { window.addEventListener('prayerZoneConfigured', this.onZoneConfigured); }
 
   ionViewWillEnter() {
     void this.dailyWisdom.refresh();
@@ -106,6 +105,7 @@ export class HomePage implements OnDestroy {
   }
 
   ngOnDestroy() {
+    window.removeEventListener('prayerZoneConfigured', this.onZoneConfigured);
     if (this.intervalId) clearInterval(this.intervalId);
     if (this.retryTimeout) clearTimeout(this.retryTimeout);
     if (this.backButtonSubscription) {

@@ -9,7 +9,7 @@ import { HomePage } from './home.page';
 import { PrayerZoneSelectorComponent } from '../prayer/components/prayer-zone-selector/prayer-zone-selector.component';
 
 @NgModule({
-  imports: [CommonModule, IonicModule, HomePageRoutingModule],
-  declarations: [HomePage, PrayerZoneSelectorComponent],
+  imports: [CommonModule, IonicModule, HomePageRoutingModule, PrayerZoneSelectorComponent],
+  declarations: [HomePage],
 })
 export class HomePageModule {}

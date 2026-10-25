@@ -1,3 +1,4 @@
+import { FirstLaunchService } from './core/startup/first-launch.service';
 import { Component, NgZone, OnDestroy, OnInit } from '@angular/core';
 import '@angular/common/locales/global/ms';
 import { App } from '@capacitor/app';
@@ -24,6 +25,9 @@ import { DarkModeHandlerService } from './core/appearance/dark-mode-handler.serv
 export class AppComponent implements OnInit, OnDestroy {
   isAppLoaded = false;
   isHomePage = false;
+  isLinkLaunch = false;
+  private nativeSplashHidden?: Promise<void>;
+  private splashDismissed = false;
   private routeSubscription?: Subscription;
   private listeners: PluginListenerHandle[] = [];
   private safetyTimer?: ReturnType<typeof setTimeout>;
@@ -40,6 +44,7 @@ export class AppComponent implements OnInit, OnDestroy {
     private prayerNotificationsService: PrayerNotificationsService,
     private darkModeService: DarkModeHandlerService,
     private zone: NgZone,
+    private firstLaunch: FirstLaunchService,
   ) {}
 
   ngOnInit(): void {
@@ -59,6 +64,8 @@ export class AppComponent implements OnInit, OnDestroy {
   private async initializeApp(): Promise<void> {
     try {
       await this.platform.ready();
+      // Reveal the custom, cached dynamic splash while routing initializes.
+      if (Capacitor.isNativePlatform()) void this.hideNativeSplash();
       await this.darkModeService.loadDarkModePreference();
       if (Capacitor.isNativePlatform()) {
         this.listeners.push(await App.addListener('appUrlOpen', event => {
@@ -98,13 +105,27 @@ export class AppComponent implements OnInit, OnDestroy {
     if (this.destroyed || this.isAppLoaded) return;
     this.isAppLoaded = true;
     clearTimeout(this.safetyTimer);
-    if (Capacitor.isNativePlatform()) {
-      void SplashScreen.hide({ fadeOutDuration: 150 }).catch(console.warn);
-      void this.updateCheck.initialize();
-    }
+  }
+
+  private hideNativeSplash(): Promise<void> {
+    return this.nativeSplashHidden ??= SplashScreen.hide({ fadeOutDuration: 150 }).catch(error => {
+      console.warn('Unable to hide native splash:', error);
+    });
+  }
+
+  async onSplashDismissed(): Promise<void> {
+    if (this.destroyed || this.splashDismissed) return;
+    this.splashDismissed = true;
+    if (!Capacitor.isNativePlatform()) return;
+    await this.hideNativeSplash();
+    // Let Angular remove the custom splash before any update dialog can appear.
+    requestAnimationFrame(() => {
+      if (!this.destroyed) void this.updateCheck.initialize();
+    });
   }
 
   private async navigateToDeepLink(url: string): Promise<void> {
+    this.isLinkLaunch = true;
     const request = ++this.linkRequest;
     try {
       const parsed = new URL(url, 'https://masjidala.web.app');

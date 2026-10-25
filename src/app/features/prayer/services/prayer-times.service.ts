@@ -166,6 +166,7 @@ export class PrayerTimesService {
     try {
       const data = await firstValueFrom(this.getPrayerTimes('KDH01', 'year').pipe(timeout(15000)));
       if (data.status !== 'OK!') return;
+      if (await this.getSavedYearlyPrayerTimes()) return;
       await Preferences.set({
         key: 'yearlyPrayerTimes',
         value: JSON.stringify({ zone: 'KDH01', prayers: data.prayerTime || [],

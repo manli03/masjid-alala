@@ -42,27 +42,61 @@ describe('CheckUpdateService', () => {
 
   afterEach(() => service.ngOnDestroy());
 
-  it('asks before downloading and honours Later across service instances', async () => {
+  it('does not restore a historical failure panel or alert on reopening', async () => {
+    native.getDownload.and.resolveTo({ state: 'failed', versionCode: 10, message: 'Old failure' });
+    native.getRelease.and.resolveTo({});
+    await service.checkForUpdate();
+    expect(service.download$.value.state).toBe('idle');
+    expect(runtime.dialog.alert).not.toHaveBeenCalled();
+  });
+
+  it('reports another failure after a fresh attempt, including the same error', () => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      service['publishDownload']({ state: 'downloading', versionCode: 10 });
+      service['publishDownload']({ state: 'failed', versionCode: 10, message: 'Failed' });
+      expect(service.download$.value.state).toBe('failed');
+    }
+  });
+
+  it('checks again after Later, including across service instances', async () => {
     await service.checkForUpdate();
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(native.startDownload).not.toHaveBeenCalled();
     service.ngOnDestroy();
     service = new CheckUpdateService(native, runtime);
     await service.checkForUpdate();
-    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(native.getRelease).toHaveBeenCalledTimes(2);
   });
 
-  it('checks shortly after startup instead of waiting fifteen seconds', fakeAsync(() => {
+  it('checks immediately when initialized after splash dismissal', fakeAsync(() => {
     (runtime.app.addListener as jasmine.Spy).and.resolveTo({ remove: async () => undefined });
     (runtime.app.getState as jasmine.Spy).and.resolveTo({ isActive: true });
     void service.initialize();
     flushMicrotasks();
-    tick(2999);
-    expect(native.getRelease).not.toHaveBeenCalled();
-    tick(1);
-    flushMicrotasks();
+    expect(native.getRelease).toHaveBeenCalledTimes(1);
+    tick(60000);
     expect(native.getRelease).toHaveBeenCalledTimes(1);
     service.ngOnDestroy();
+  }));
+
+  it('checks on every foreground entry even after an earlier offer was declined', fakeAsync(() => {
+    let onState!: (state: { isActive: boolean }) => void;
+    (runtime.app.addListener as jasmine.Spy).and.callFake(async (_event, callback) => {
+      onState = callback;
+      return { remove: async () => undefined };
+    });
+    (runtime.app.getState as jasmine.Spy).and.resolveTo({ isActive: true });
+    void service.initialize();
+    flushMicrotasks();
+    expect(native.getRelease).toHaveBeenCalledTimes(1);
+    for (let count = 2; count <= 3; count++) {
+      onState({ isActive: false });
+      onState({ isActive: true });
+      flushMicrotasks();
+      expect(native.getRelease).toHaveBeenCalledTimes(count);
+      expect(confirm).toHaveBeenCalledTimes(count);
+    }
   }));
 
   it('downloads only after consent', async () => {
@@ -104,19 +138,21 @@ describe('CheckUpdateService', () => {
     expect(native.install).toHaveBeenCalledTimes(1);
   });
 
-  it('reminds again the next day for a downloaded update', async () => {
+  it('does not reopen a cancelled installer automatically, but permits manual retry', async () => {
     storage.set('app-update-last-prompt', 'yesterday');
     storage.set('app-update-install-prompt', '9');
     native.getDownload.and.resolveTo({ state: 'ready', versionCode: 9, versionName: '1.2.3' });
     await service.checkForUpdate();
+    expect(native.install).not.toHaveBeenCalled();
+    await service.checkForUpdate(true);
     expect(native.install).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
   });
 
-  it('manual checks bypass daily reminders and server-check throttling', async () => {
+  it('old stored check and reminder dates do not suppress automatic checks', async () => {
     storage.set('app-update-last-prompt', new Date().toDateString());
     storage.set('app-update-last-check', String(Date.now()));
-    await service.checkForUpdate(true);
+    await service.checkForUpdate();
     expect(native.getRelease).toHaveBeenCalledTimes(1);
     expect(confirm).toHaveBeenCalledTimes(1);
   });
@@ -133,7 +169,7 @@ describe('CheckUpdateService', () => {
     native.getDownload.and.resolveTo({ state: 'failed', message: 'Offline' });
     confirm.and.resolveTo({ value: true });
     await service.checkForUpdate(true);
-    expect(runtime.dialog.alert).toHaveBeenCalled();
+    expect(runtime.dialog.alert).not.toHaveBeenCalled();
     expect(native.startDownload).toHaveBeenCalledTimes(1);
   });
 
@@ -156,6 +192,7 @@ describe('CheckUpdateService', () => {
       return Promise.resolve({ remove: async () => undefined });
     }) as typeof App.addListener);
     (runtime.app.getState as jasmine.Spy).and.resolveTo({ isActive: true });
+    native.getRelease.and.resolveTo({});
     await service.initialize();
     onState({ isActive: false });
     native.getDownload.and.resolveTo({ state: 'ready', versionCode: 9 });
@@ -164,12 +201,12 @@ describe('CheckUpdateService', () => {
     expect(native.install).not.toHaveBeenCalled();
   });
 
-  it('throttles repeated checks and keeps automatic network failures quiet', async () => {
+  it('retries each requested check without a cooldown after network failure', async () => {
     native.getRelease.and.rejectWith(new Error('Offline'));
     spyOn(console, 'warn');
     await service.checkForUpdate();
     await service.checkForUpdate();
-    expect(native.getRelease).toHaveBeenCalledTimes(1);
+    expect(native.getRelease).toHaveBeenCalledTimes(2);
     expect(runtime.dialog.alert).not.toHaveBeenCalled();
     expect(service.checking$.value).toBeFalse();
   });
@@ -202,7 +239,7 @@ describe('CheckUpdateService', () => {
     spyOn(console, 'warn');
     await service.checkForUpdate();
     expect(runtime.dialog.alert).toHaveBeenCalled();
-    expect(service.download$.value.state).toBe('ready');
+    expect(service.download$.value.state).toBe('failed');
   });
 
   it('reports no available update on a manual check', async () => {
@@ -224,6 +261,7 @@ describe('CheckUpdateService', () => {
     storage.set('app-update-last-prompt', new Date().toDateString());
     native.getDownload.and.resolveTo({ state: 'failed', versionCode: 10,
       message: 'Versi APK tidak sepadan dengan versi kemas kini.' });
+    service['publishDownload']({ state: 'downloading', versionCode: 10 });
     await service.checkForUpdate();
     expect(runtime.dialog.alert).toHaveBeenCalledTimes(1);
     expect(service.download$.value.message).toContain('Versi APK');

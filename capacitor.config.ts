@@ -10,8 +10,6 @@ const config: CapacitorConfig = {
     },
     SplashScreen: {
       launchAutoHide: false,
-      backgroundColor: '#004d39',
-      launchFadeOutDuration: 150,
     },
     GpsEnabler: {},
     GoogleAuth: {
