@@ -185,6 +185,7 @@ export class PrayerNotificationsService {
       if (permResult.display === 'prompt' || permResult.display === 'prompt-with-rationale') {
         const consent = await this.alertController.create({
           header: 'Aktifkan Peringatan Solat',
+          backdropDismiss: false,
           message: 'Benarkan notifikasi untuk menerima peringatan waktu solat yang anda pilih. Anda boleh mengubahnya pada bila-bila masa dalam tetapan peringatan.',
           buttons: [{ text: 'Kemudian', role: 'cancel' }, { text: 'Benarkan', role: 'allow' }],
         });
@@ -216,6 +217,7 @@ export class PrayerNotificationsService {
           backdropDismiss: false,
         });
         await alert.present();
+        await alert.onDidDismiss();
         return false;
       }
 

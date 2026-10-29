@@ -1,6 +1,6 @@
 <app-loading [loaded]="isAppLoaded" [isHomePage]="isHomePage"
   [fastLaunch]="isLinkLaunch || !isHomePage" (dismissed)="onSplashDismissed()"></app-loading>
 <ion-app>
-  <ion-router-outlet></ion-router-outlet>
+  <ion-router-outlet [attr.inert]="onboardingComplete ? null : ''"></ion-router-outlet>
   <app-update-progress></app-update-progress>
 </ion-app>

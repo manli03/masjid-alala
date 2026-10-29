@@ -15,6 +15,7 @@ export const FIRST_LAUNCH_PREFERENCES = new InjectionToken<typeof Preferences>('
 @Injectable({ providedIn: 'root' })
 export class FirstLaunchService {
   private running?: Promise<void>;
+  get isRunning(): boolean { return !!this.running; }
   constructor(private modals: ModalController, private alerts: AlertController,
     private prayers: PrayerTimesService, private notifications: PrayerNotificationsService,
     @Inject(FIRST_LAUNCH_PREFERENCES) private preferences: typeof Preferences = Preferences) {}
@@ -49,12 +50,13 @@ export class FirstLaunchService {
         }
       }
     }
-    if (!Capacitor.isNativePlatform() ||
-      (await this.preferences.get({ key: 'first-launch-notifications-offered' })).value === 'true') return;
+    if (!Capacitor.isNativePlatform()) return;
     const granted = await this.notifications.initializeNotifications();
-    await this.preferences.set({ key: 'first-launch-notifications-offered', value: 'true' });
     if (!granted) return;
-    await this.notifications.checkPermissionAndSchedule(true);
+    const needsGuidance = (await this.preferences.get({ key: 'first-launch-notifications-configured' })).value !== 'true';
+    // An earlier attempt may have recorded a schedule timestamp while permission was denied.
+    await this.notifications.checkPermissionAndSchedule(needsGuidance);
+    if (!needsGuidance) return;
     const guidance = await this.alerts.create({ header: 'Tetapkan Peringatan Solat',
       message: 'Peringatan semua waktu diaktifkan secara lalai. Pilih waktu, bunyi azan dan masa peringatan dalam tetapan berikut.', buttons: ['Buka Tetapan'], backdropDismiss: false });
     await guidance.present();
@@ -62,5 +64,6 @@ export class FirstLaunchService {
     const settings = await this.modals.create({ component: NotificationSettingsComponent, cssClass: 'notification-settings-modal' });
     await settings.present();
     await settings.onDidDismiss();
+    await this.preferences.set({ key: 'first-launch-notifications-configured', value: 'true' });
   }
 }

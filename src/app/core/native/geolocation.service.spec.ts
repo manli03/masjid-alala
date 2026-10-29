@@ -69,4 +69,21 @@ describe('LocationService GPS enable prompt', () => {
     expect(await service.getCurrentLocation()).toBe(position);
     expect(getPosition).toHaveBeenCalledTimes(1);
   });
+  it('uses an existing browser grant without showing consent', async () => {
+    spyOn(navigator.permissions, 'query').and.resolveTo({ state: 'granted' } as PermissionStatus);
+    const position = {} as GeolocationPosition;
+    spyOn(navigator.geolocation, 'getCurrentPosition').and.callFake(success => success(position));
+    expect(await service.getCurrentLocation()).toBe(position);
+    expect(alerts.create).not.toHaveBeenCalled();
+  });
+  it('uses the Android grant even when the WebView permission query is unavailable', async () => {
+    spyOn(Capacitor, 'getPlatform').and.returnValue('android');
+    const query = spyOn(navigator.permissions, 'query').and.rejectWith(new Error('Unavailable'));
+    service = new LocationService(alerts, { getPermissionState: async () => ({ state: 'granted' }) });
+    const position = {} as GeolocationPosition;
+    spyOn(navigator.geolocation, 'getCurrentPosition').and.callFake(success => success(position));
+    expect(await service.getCurrentLocation(undefined, false)).toBe(position);
+    expect(query).not.toHaveBeenCalled();
+    expect(alerts.create).not.toHaveBeenCalled();
+  });
 });

@@ -26,6 +26,7 @@ export class AppComponent implements OnInit, OnDestroy {
   isAppLoaded = false;
   isHomePage = false;
   isLinkLaunch = false;
+  onboardingComplete = false;
   private nativeSplashHidden?: Promise<void>;
   private splashDismissed = false;
   private routeSubscription?: Subscription;
@@ -36,6 +37,7 @@ export class AppComponent implements OnInit, OnDestroy {
   private pendingLink?: string;
   private linkRequest = 0;
   private destroyed = false;
+  private retryOnResume = false;
 
   constructor(
     private router: Router,
@@ -76,12 +78,7 @@ export class AppComponent implements OnInit, OnDestroy {
         this.listeners.push(await PushNotifications.addListener('pushNotificationActionPerformed', () => {
           this.zone.run(() => { void this.router.navigateByUrl('/tabs/home'); });
         }));
-        this.listeners.push(await App.addListener('appStateChange', async state => {
-          if (state.isActive && localStorage.getItem('notificationSettingsOpened') === 'true') {
-            localStorage.removeItem('notificationSettingsOpened');
-            await this.prayerNotificationsService.checkPermissionAndSchedule(true);
-          }
-        }));
+        this.listeners.push(await App.addListener('appStateChange', state => this.onAppStateChange(state.isActive)));
         void this.applySafeAreaIfSDK35Plus().catch(console.warn);
         void StatusBar.setBackgroundColor({ color: '#004d39' }).catch(console.warn);
       }
@@ -90,6 +87,24 @@ export class AppComponent implements OnInit, OnDestroy {
     } finally {
       this.launchResolved = true;
       this.finishStartup();
+    }
+  }
+
+  private async onAppStateChange(isActive: boolean): Promise<void> {
+    if (!isActive) {
+      // Permission dialogs can pause the app during an existing onboarding run.
+      this.retryOnResume = this.splashDismissed && !this.firstLaunch.isRunning;
+      return;
+    }
+    const settingsOpened = localStorage.getItem('notificationSettingsOpened') === 'true';
+    const retryOnResume = this.retryOnResume;
+    this.retryOnResume = false;
+    if (settingsOpened) {
+      localStorage.removeItem('notificationSettingsOpened');
+      await this.prayerNotificationsService.checkPermissionAndSchedule(true);
+    }
+    if (this.splashDismissed && (retryOnResume || settingsOpened)) {
+      await this.firstLaunch.run();
     }
   }
 
@@ -116,8 +131,10 @@ export class AppComponent implements OnInit, OnDestroy {
   async onSplashDismissed(): Promise<void> {
     if (this.destroyed || this.splashDismissed) return;
     this.splashDismissed = true;
+    if (Capacitor.isNativePlatform()) await this.hideNativeSplash();
+    await this.firstLaunch.run();
+    this.onboardingComplete = true;
     if (!Capacitor.isNativePlatform()) return;
-    await this.hideNativeSplash();
     // Let Angular remove the custom splash before any update dialog can appear.
     requestAnimationFrame(() => {
       if (!this.destroyed) void this.updateCheck.initialize();

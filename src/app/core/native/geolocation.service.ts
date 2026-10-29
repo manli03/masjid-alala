@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core';
+import { Inject, Injectable, InjectionToken } from '@angular/core';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { AlertController } from '@ionic/angular';
 import { NativeSettings, AndroidSettings, IOSSettings } from 'capacitor-native-settings';
@@ -11,12 +11,22 @@ interface GpsEnablerPlugin {
   isGpsEnabled: () => Promise<void>;
 }
 
+export interface LocationPermissionPlugin {
+  getPermissionState(): Promise<{ state: PermissionState }>;
+}
+
+const LocationPermission = registerPlugin<LocationPermissionPlugin>('LocationPermission');
+export const LOCATION_PERMISSION_API = new InjectionToken<LocationPermissionPlugin>('LOCATION_PERMISSION_API', {
+  providedIn: 'root', factory: () => LocationPermission,
+});
+
 @Injectable({
   providedIn: 'root',
 })
 export class LocationService {
   constructor(
     private alertController: AlertController,
+    @Inject(LOCATION_PERMISSION_API) private nativePermission: LocationPermissionPlugin = LocationPermission,
   ) {
   }
 
@@ -163,9 +173,16 @@ export class LocationService {
 
   async getCurrentLocation(options?: PositionOptions, interactive = true): Promise<GeolocationPosition> {
     let state: PermissionState | undefined;
-    try {
-      state = (await navigator.permissions.query({ name: 'geolocation' })).state;
-    } catch { /* Some native WebViews do not expose permission queries. */ }
+    if (Capacitor.getPlatform() === 'android') {
+      try {
+        state = (await this.nativePermission.getPermissionState()).state;
+      } catch { /* Fall back to the WebView permission API on older native builds. */ }
+    }
+    if (state === undefined) {
+      try {
+        state = (await navigator.permissions.query({ name: 'geolocation' })).state;
+      } catch { /* Some native WebViews do not expose permission queries. */ }
+    }
     if (state === 'denied') throw 'Kebenaran lokasi ditolak';
     if (state !== 'granted') {
       if (!interactive) throw 'Kebenaran lokasi belum diberikan';
