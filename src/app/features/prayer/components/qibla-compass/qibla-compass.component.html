@@ -5,12 +5,12 @@
   </div>
 
   <div class="location-switch" role="group" aria-label="Sumber lokasi kiblat">
-    <button type="button" [class.selected]="target?.source === 'gps'" [attr.aria-pressed]="target?.source === 'gps'"
-      [disabled]="locationLoading" (click)="loadCompassResources('gps')">
+    <button type="button" [class.selected]="locationMode === 'gps'" [attr.aria-pressed]="locationMode === 'gps'"
+      [disabled]="locationLoading" (click)="selectLocationMode('gps')">
       <ion-icon name="locate-outline" aria-hidden="true"></ion-icon> Lokasi saya
     </button>
-    <button type="button" [class.selected]="target?.source === 'zone'" [attr.aria-pressed]="target?.source === 'zone'"
-      [disabled]="locationLoading" (click)="loadCompassResources('zone')">
+    <button type="button" [class.selected]="locationMode === 'zone'" [attr.aria-pressed]="locationMode === 'zone'"
+      [disabled]="locationLoading" (click)="selectLocationMode('zone')">
       <ion-icon name="map-outline" aria-hidden="true"></ion-icon> Zon dipilih
     </button>
   </div>

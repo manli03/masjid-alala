@@ -96,5 +96,27 @@ describe('Qibla calculation and sources', () => {
     expect(target.bearing).toBeCloseTo(292.54, 1);
     expect(target.gpsMessage).toBeUndefined();
     expect(location.ensureLocationEnabled.calls.mostRecent().args).toEqual([false]);
+    expect(location.getCurrentLocation.calls.mostRecent().args[1]).toBeTrue();
+  });
+  it('keeps initial GPS refresh silent even when GPS is explicitly the default', async () => {
+    stored['qiblaLocationMode'] = 'zone';
+    await service.getTarget('gps', false);
+    expect(location.ensureLocationEnabled).toHaveBeenCalledWith(false);
+    expect(location.getCurrentLocation.calls.mostRecent().args[1]).toBeFalse();
+    expect(location.showOpenSettingsDialog).not.toHaveBeenCalled();
+  });
+  it('does not request permission again on resume after the user declines', async () => {
+    location.getCurrentLocation.and.rejectWith('Permintaan lokasi dibatalkan');
+    expect((await service.getTarget('gps')).fallback).toBeTrue();
+    await service.getTarget('gps', false);
+    expect(location.getCurrentLocation.calls.mostRecent().args[1]).toBeFalse();
+  });
+  it('cancels pending GPS permission when the user switches to a zone', async () => {
+    location.ensureLocationEnabled.and.resolveTo(false);
+    await service.getTarget('gps');
+    await service.getTarget('zone');
+    location.ensureLocationEnabled.and.resolveTo(true);
+    await service.getTarget('gps', false);
+    expect(location.getCurrentLocation.calls.mostRecent().args[1]).toBeFalse();
   });
 });

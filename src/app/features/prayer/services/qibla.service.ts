@@ -51,23 +51,30 @@ export function parseZoneBearing(value: unknown): number | null {
 
 @Injectable({ providedIn: 'root' })
 export class QiblaService {
+  private awaitingLocationActivation = false;
+
   constructor(
     private http: HttpClient,
     private location: LocationService,
     @Inject(QIBLA_PREFERENCES) private preferences: typeof Preferences,
   ) {}
 
-  async getTarget(mode?: 'gps' | 'zone'): Promise<QiblaTarget> {
+  async getTarget(mode?: 'gps' | 'zone', interactive = mode === 'gps'): Promise<QiblaTarget> {
     if (mode) await this.preferences.set({ key: 'qiblaLocationMode', value: mode });
     const selectedMode = mode ?? (await this.preferences.get({ key: 'qiblaLocationMode' })).value;
     if (selectedMode !== 'zone') {
       try {
-        if (!await this.location.ensureLocationEnabled(mode === 'gps')) {
+        // Remember the user-started request while they enable GPS in settings.
+        // On return, permission may still need to be granted before GPS can run.
+        if (interactive) this.awaitingLocationActivation = true;
+        if (!await this.location.ensureLocationEnabled(interactive)) {
           throw new Error('Aktifkan lokasi (GPS) dalam tetapan telefon untuk menggunakan Lokasi saya.');
         }
+        const requestPermission = interactive || this.awaitingLocationActivation;
+        this.awaitingLocationActivation = false;
         const { coords } = await this.location.getCurrentLocation({
           enableHighAccuracy: true, maximumAge: 0, timeout: 15000,
-        }, mode === 'gps');
+        }, requestPermission);
         return {
           bearing: calculateQiblaBearing(coords.latitude, coords.longitude),
           source: 'gps', latitude: coords.latitude, longitude: coords.longitude,
@@ -75,7 +82,7 @@ export class QiblaService {
         };
       } catch (error) {
         const permissionDenied = error === 'Kebenaran lokasi ditolak';
-        if (mode === 'gps' && permissionDenied) {
+        if (interactive && permissionDenied) {
           await this.location.showOpenSettingsDialog();
         }
         const gpsMessage = error instanceof Error && error.message.startsWith('Aktifkan lokasi')
@@ -90,6 +97,7 @@ export class QiblaService {
         }
       }
     }
+    this.awaitingLocationActivation = false;
     return this.getZoneTarget();
   }
 

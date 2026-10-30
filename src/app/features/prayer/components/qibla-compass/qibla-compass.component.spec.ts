@@ -5,6 +5,7 @@ describe('QiblaCompassComponent heading', () => {
   beforeEach(() => {
     component = new QiblaCompassComponent({} as any, {} as any, {} as any, new NgZone({}));
     component.uiState = 'calibrated';
+    (component as any).compassStarted = true;
   });
   function reading(heading: number) {
     const angle = -heading * Math.PI / 360;
@@ -45,12 +46,13 @@ describe('QiblaCompassComponent heading', () => {
     const getTarget = jasmine.createSpy().and.resolveTo({ source: 'gps', bearing: 293.2 });
     component = new QiblaCompassComponent({} as any, {} as any, { getTarget } as any, new NgZone({}));
     component.uiState = 'calibrated';
+    (component as any).compassStarted = true;
     component.target = { source: 'zone', bearing: 291.5, fallback: true, gpsMessage: 'Aktifkan GPS' };
     component.locationError = 'Lokasi tidak tersedia';
     const start = spyOn(component, 'startCompassDisplay');
     component.handleAppResume();
     await Promise.resolve();
-    expect(getTarget).toHaveBeenCalledWith(undefined);
+    expect(getTarget).toHaveBeenCalledWith('gps', false);
     expect(component.target?.source).toBe('gps');
     expect(component.qiblaHeading).toBe(293.2);
     expect(component.target?.gpsMessage).toBeUndefined();
@@ -63,6 +65,7 @@ describe('QiblaCompassComponent heading', () => {
     const oldResult = new Promise<any>((resolve) => { finishOld = resolve; });
     const getTarget = jasmine.createSpy().and.returnValues(oldResult, Promise.resolve({ source: 'gps', bearing: 294 }));
     component = new QiblaCompassComponent({} as any, {} as any, { getTarget } as any, new NgZone({}));
+    (component as any).compassStarted = true;
     const oldRequest = component.loadCompassResources('gps');
     component.handleAppResume();
     await Promise.resolve();
@@ -88,6 +91,51 @@ describe('QiblaCompassComponent heading', () => {
     (component as any).sensor.quaternion = [Math.SQRT1_2, 0, 0, Math.SQRT1_2];
     component.handleCompassReading();
     expect(component.isQiblaAligned).toBeFalse();
+  });
+});
+
+describe('QiblaCompassComponent location flow', () => {
+  let component: QiblaCompassComponent;
+  let getTarget: jasmine.Spy;
+  beforeEach(() => {
+    getTarget = jasmine.createSpy().and.resolveTo({ source: 'gps', bearing: 293 });
+    component = new QiblaCompassComponent({} as any, {} as any, { getTarget } as any, new NgZone({}));
+    spyOn(component, 'checkSupportAndStartDetection').and.resolveTo();
+  });
+  afterEach(() => component.ngOnDestroy());
+
+  it('defaults to GPS and does not request location on resume before starting', () => {
+    expect(component.locationMode).toBe('gps');
+    component.handleAppResume();
+    expect(getTarget).not.toHaveBeenCalled();
+  });
+
+  it('defers requests from the location selector until Mulakan kompas', async () => {
+    await component.selectLocationMode('zone');
+    await component.selectLocationMode('gps');
+    expect(getTarget).not.toHaveBeenCalled();
+    await component.startCalibrationProcess();
+    expect(getTarget).toHaveBeenCalledOnceWith('gps', true);
+  });
+
+  it('keeps GPS selected during zone fallback and retries automatically on return', async () => {
+    getTarget.and.resolveTo({ source: 'zone', bearing: 291, fallback: true });
+    await component.startCalibrationProcess();
+    expect(component.target?.source).toBe('zone');
+    expect(component.locationMode).toBe('gps');
+    getTarget.and.resolveTo({ source: 'gps', bearing: 293 });
+    component.handleAppResume();
+    await Promise.resolve();
+    expect(getTarget.calls.mostRecent().args).toEqual(['gps', false]);
+    expect(component.target?.source).toBe('gps');
+  });
+
+  it('honours an explicitly selected manual zone when starting and resuming', async () => {
+    await component.selectLocationMode('zone');
+    await component.startCalibrationProcess();
+    expect(getTarget).toHaveBeenCalledOnceWith('zone', false);
+    component.handleAppResume();
+    expect(getTarget.calls.mostRecent().args).toEqual(['zone', false]);
   });
 });
 

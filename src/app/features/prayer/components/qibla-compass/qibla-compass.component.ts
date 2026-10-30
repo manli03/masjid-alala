@@ -33,6 +33,8 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
   target: QiblaTarget | null = null;
   locationLoading = false;
   locationError: string | null = null;
+  locationMode: 'gps' | 'zone' = 'gps';
+  private compassStarted = false;
   private locationRequest = 0;
   private resumeSubscription?: Subscription;
   private appStateListener?: Promise<PluginListenerHandle>;
@@ -65,8 +67,6 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit() {
-    void this.loadCompassResources();
-
     const onResume = () => this.ngZone.run(() => this.handleAppResume());
     if (Capacitor.isNativePlatform()) {
       // Capacitor settings activities resume through appStateChange, rather
@@ -99,10 +99,9 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
   handleAppResume(): void {
     const previousState = this.uiState;
     this.resetCompassState();
-    // The saved GPS choice remains selected during a temporary zone fallback.
-    // Starting a new request also prevents an older settings-dialog result
-    // from replacing the fresh GPS bearing when it finishes later.
-    void this.loadCompassResources();
+    // Do not check or request location until the user starts the compass.
+    // A new request supersedes any settings-dialog result still in flight.
+    if (this.compassStarted) void this.loadCompassResources();
     if (previousState === 'calibrated') {
       this.uiState = 'calibrated';
       this.startCompassDisplay();
@@ -130,7 +129,13 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
 
   // --- Resource Loading ---
 
-  async loadCompassResources(mode?: 'gps' | 'zone') {
+  async selectLocationMode(mode: 'gps' | 'zone') {
+    this.locationMode = mode;
+    if (this.compassStarted) await this.loadCompassResources(mode);
+  }
+
+  async loadCompassResources(mode?: 'gps' | 'zone', interactive = mode === 'gps') {
+    if (mode) this.locationMode = mode;
     const request = ++this.locationRequest;
     this.locationLoading = true;
     this.locationError = null;
@@ -138,7 +143,7 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
     this.target = null;
     this.isQiblaAligned = false;
     try {
-      const target = await this.qiblaService.getTarget(mode);
+      const target = await this.qiblaService.getTarget(this.locationMode, interactive);
       if (request !== this.locationRequest) return;
       this.target = target;
       this.qiblaHeading = target.bearing;
@@ -156,8 +161,9 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
   async startCalibrationProcess() {
     console.log('Starting calibration process...');
     this.uiState = 'calibrating';
+    this.compassStarted = true;
     this.errorMessageCompass = null; // Clear previous errors
-    if (!this.locationLoading) void this.loadCompassResources();
+    void this.loadCompassResources(this.locationMode);
     this.checkSupportAndStartDetection();
   }
 
