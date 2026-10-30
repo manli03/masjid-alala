@@ -1,0 +1,43 @@
+import groovy.json.JsonSlurper
+import java.util.regex.Matcher
+
+// Run during configuration: Android Studio Sync does not execute build tasks.
+// Android's default versionName is the source of truth; versionCode stays native.
+def appVersion = android.defaultConfig.versionName
+if (!appVersion) {
+    throw new GradleException('Set android.defaultConfig.versionName before syncing npm versions.')
+}
+
+def versionPattern = /("version"\s*:\s*")[^"]*(")/
+def rootPackageVersionPattern = /("packages"\s*:\s*\{\s*""\s*:\s*\{[^{}]*?"version"\s*:\s*")[^"]*(")/
+def encodedVersion = groovy.json.JsonOutput.toJson(appVersion)
+def escapedVersion = encodedVersion.substring(1, encodedVersion.length() - 1)
+
+['package.json', 'package-lock.json'].each { name ->
+    def metadataFile = new File(rootDir.parentFile, name)
+    if (metadataFile.exists()) {
+        def original = metadataFile.getText('UTF-8')
+        def metadata = new JsonSlurper().parseText(original)
+        def updated = original
+        def replaceVersion = { String content, String pattern ->
+            def matcher = content =~ pattern
+            if (!matcher.find()) {
+                throw new GradleException("Cannot locate version in ${metadataFile}")
+            }
+            matcher.replaceFirst(Matcher.quoteReplacement(matcher.group(1) + escapedVersion + matcher.group(2)))
+        }
+
+        if (metadata.version != appVersion) {
+            updated = replaceVersion(updated, versionPattern)
+        }
+        if (name == 'package-lock.json' && metadata.packages?.containsKey('') &&
+                metadata.packages[''].version != appVersion) {
+            updated = replaceVersion(updated, rootPackageVersionPattern)
+        }
+        // Preserve formatting and avoid touching files on subsequent syncs.
+        if (updated != original) {
+            metadataFile.setText(updated, 'UTF-8')
+            logger.lifecycle("Updated ${name} version to ${appVersion}")
+        }
+    }
+}
