@@ -37,25 +37,25 @@
 
   <div *ngIf="uiState === 'calibrating'" class="state-panel">
     <h6>Kalibrasi kompas</h6>
-    <p>Gerakkan telefon dalam bentuk angka 8 sehingga kompas muncul.</p>
+    <p>Ikut gerakan angka 8 dalam panduan. Kompas akan dipaparkan secara automatik apabila sedia.</p>
     <img class="calibration-image" [src]="calibrationGifUrl" alt="Gerakkan telefon dalam bentuk angka lapan">
     <p class="errorMessage" *ngIf="errorMessageCompass">{{ errorMessageCompass }}</p>
-    <ion-button (click)="manualCompleteCalibration()" expand="block">
+    <ion-button *ngIf="!usesNativeCompass" (click)="manualCompleteCalibration()" expand="block">
       <ion-icon name="checkmark-outline" slot="start" aria-hidden="true"></ion-icon>Selesai kalibrasi
     </ion-button>
   </div>
 
-  <div *ngIf="uiState === 'calibrated'" class="compass-content" [class.is-aligned]="isQiblaAligned">
+  <div *ngIf="uiState === 'calibrated'" class="compass-content" [class.is-aligned]="compassReady && isQiblaAligned">
     <div class="alignment-status">
       <h6 aria-live="polite">
-        <ion-icon *ngIf="isQiblaAligned" name="checkmark-circle" aria-hidden="true"></ion-icon>
-        {{ directionLabel }}
+        <ion-icon *ngIf="compassReady && isQiblaAligned" name="checkmark-circle" aria-hidden="true"></ion-icon>
+        {{ compassReady ? directionLabel : 'Menunggu kompas sedia' }}
       </h6>
-      <p *ngIf="qiblaHeading !== null && previousHeading !== null">{{ isQiblaAligned ? 'Anda sedang menghadap kiblat' : 'Putar telefon ' + (turnDegrees | number:'1.0-0') + '° lagi' }}</p>
-      <p *ngIf="qiblaHeading === null || previousHeading === null">Pegang telefon rata untuk membaca arah</p>
+      <p *ngIf="compassReady">{{ isQiblaAligned ? 'Anda sedang menghadap kiblat' : 'Putar telefon ' + (turnDegrees | number:'1.0-0') + '° lagi' }}</p>
+      <p *ngIf="!compassReady">Pegang telefon rata. Jika perlu, gerakkan dalam bentuk angka 8 dan jauhkan daripada magnet.</p>
     </div>
 
-    <div class="compass-frame" [class.aligned]="isQiblaAligned" role="img"
+    <div *ngIf="compassReady; else compassLoading" class="compass-frame" [class.aligned]="isQiblaAligned" role="img"
       [attr.aria-label]="isQiblaAligned ? 'Kompas selari dengan kiblat' : 'Ikut anak panah untuk menghadap kiblat'">
       <div class="compass-container" aria-hidden="true">
         <div class="compass-dial" [style.transform]="'rotate(' + (-accumulatedRotation) + 'deg)'">
@@ -70,11 +70,21 @@
       </div>
     </div>
 
+    <ng-template #compassLoading>
+      <div class="compass-frame compass-loading" role="status" aria-live="polite">
+        <img *ngIf="usesNativeCompass && !locationError" class="calibration-image" [src]="calibrationGifUrl" alt="Gerakkan telefon dalam bentuk angka lapan">
+        <ion-spinner *ngIf="!usesNativeCompass && !locationError" name="crescent" aria-hidden="true"></ion-spinner>
+        <span>{{ locationError ? 'Arah kiblat tidak tersedia' : 'Menunggu bacaan kompas yang tepat...' }}</span>
+      </div>
+    </ng-template>
+
     <div class="bearing-summary">
       <div><span>Arah kiblat</span><strong>{{ qiblaHeading === null ? '—' : (qiblaHeading | number:'1.1-1') + '°' }}</strong></div>
-      <div><span>Haluan anda</span><strong>{{ previousHeading === null ? '—' : (displayHeading | number:'1.0-0') + '°' }}</strong></div>
+      <div><span>Haluan anda</span><strong>{{ !compassReady ? '—' : (displayHeading | number:'1.0-0') + '°' }}</strong></div>
     </div>
     <p class="compass-tip"><ion-icon name="information-circle-outline" aria-hidden="true"></ion-icon>Pegang telefon rata, jauh daripada logam dan magnet.</p>
+    <p class="compass-tip" *ngIf="compassReady && !usesNativeCompass">Arah berdasarkan utara magnet. Ketepatan kompas tidak dapat disahkan oleh pelayar ini.</p>
+    <p class="compass-tip" *ngIf="compassReady && usesNativeCompass && !trueNorthCorrected">Anggaran berdasarkan utara magnet. Gunakan lokasi GPS untuk arah yang lebih tepat.</p>
   </div>
 
   <div class="state-panel errorMessage" *ngIf="uiState === 'error' || uiState === 'unsupported'" role="alert">

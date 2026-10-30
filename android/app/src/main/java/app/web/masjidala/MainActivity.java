@@ -11,6 +11,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(AndroidAudio.class);
         registerPlugin(AppUpdaterPlugin.class);
         registerPlugin(LocationPermissionPlugin.class);
+        registerPlugin(CompassPlugin.class);
         normalizeDeepLink(getIntent());
         super.onCreate(savedInstanceState);
     }

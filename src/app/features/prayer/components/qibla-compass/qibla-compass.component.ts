@@ -4,6 +4,7 @@ import { Subscription } from 'rxjs';
 import { App } from '@capacitor/app';
 import { Capacitor, PluginListenerHandle } from '@capacitor/core';
 import { QiblaService, QiblaTarget } from '../../services/qibla.service';
+import { NativeCompass, NativeCompassSensor } from '../../../../core/native/compass-sensor';
 
 // Declare sensor types to avoid TypeScript errors
 declare const AbsoluteOrientationSensor: any;
@@ -18,6 +19,9 @@ const CALIBRATION_WINDOW_SIZE = 180; // Number of samples (~3 seconds at 60Hz)
 const CALIBRATION_PITCH_THRESHOLD = 60; // Min degrees change required for pitch
 const CALIBRATION_ROLL_THRESHOLD = 60; // Min degrees change required for roll
 const CALIBRATION_YAW_THRESHOLD = 120; // Min degrees change required for yaw (using helper function)
+// App precision policy: require Android's highest calibration status and,
+// where available, an estimated heading error no greater than five degrees.
+const MAX_HEADING_ERROR_DEGREES = 5;
 // ---------------------------------------
 
 @Component({
@@ -41,6 +45,11 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
   isQiblaAligned: boolean = false;
   accumulatedRotation: number = 0;
   previousHeading: number | null = null;
+  private headingValid = false;
+  headingAccuracy: number | null = null;
+  private magneticDeclination = 0;
+  private nativeCompass = NativeCompass;
+  trueNorthCorrected = false;
 
   // UI and Calibration State
   uiState: 'initial' | 'calibrating' | 'calibrated' | 'error' | 'unsupported' =
@@ -115,6 +124,7 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
 
   resetCompassState() {
     this.stopSensor();
+    this.resetHeadingReadiness();
     this.uiState = 'initial';
     this.errorMessageCompass = null;
     this.isQiblaAligned = false;
@@ -140,13 +150,25 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
     this.locationLoading = true;
     this.locationError = null;
     this.qiblaHeading = null;
+    this.magneticDeclination = 0;
+    this.trueNorthCorrected = false;
     this.target = null;
     this.isQiblaAligned = false;
     try {
       const target = await this.qiblaService.getTarget(this.locationMode, interactive);
       if (request !== this.locationRequest) return;
+      if (this.usesNativeCompass && target.latitude !== undefined && target.longitude !== undefined) {
+        const { degrees } = await this.nativeCompass.getDeclination({ latitude: target.latitude, longitude: target.longitude });
+        if (request !== this.locationRequest) return;
+        if (!Number.isFinite(degrees)) throw new Error('Gagal menentukan pembetulan utara benar.');
+        this.magneticDeclination = degrees;
+        this.trueNorthCorrected = true;
+      }
       this.target = target;
       this.qiblaHeading = target.bearing;
+      // Reapply the latest sensor sample with the location's north correction
+      // before releasing the location loading state and displaying the arrow.
+      if (this.uiState === 'calibrated') this.handleCompassReading();
       this.checkQiblaAlignment();
     } catch (error) {
       if (request !== this.locationRequest) return;
@@ -176,6 +198,14 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
   // --- Sensor Handling and Calibration ---
 
   async checkSupportAndStartDetection() {
+    if (this.usesNativeCompass) {
+      if (!Capacitor.isPluginAvailable('Compass')) {
+        this.showSensorError({ name: 'NotReadableError' });
+        return;
+      }
+      this.initializeSensorForCalibration();
+      return;
+    }
     if (!('AbsoluteOrientationSensor' in window)) {
       this.ngZone.run(() => {
         this.errorMessageCompass =
@@ -227,11 +257,9 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
   initializeSensorForCalibration() {
     try {
       this.stopSensor(); // Ensure any previous sensor is stopped
+      this.calibrationData = { pitch: [], roll: [], yaw: [] };
 
-      this.sensor = new AbsoluteOrientationSensor({
-        frequency: 60,
-        referenceFrame: 'screen',
-      });
+      this.sensor = this.createCompassSensor();
 
       this.sensorSubscription = () => this.handleCalibrationReading(); // Assign the handler
       this.sensor.addEventListener('reading', this.sensorSubscription);
@@ -259,6 +287,15 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
   handleCalibrationReading() {
     if (this.uiState !== 'calibrating' || !this.sensor?.quaternion) {
       return; // Only process during calibration state and if data is valid
+    }
+
+    // Keep the GIF visible while native accuracy is insufficient. Transition
+    // automatically on a usable, accurate sample without restarting the sensor.
+    if (this.sensor instanceof NativeCompassSensor) {
+      if (this.nativeReadingAccurate() && this.sensor.heading !== null && Number.isFinite(this.sensor.heading)) {
+        this.ngZone.run(() => this.completeCalibration());
+      }
+      return;
     }
 
     // Check for calibration timeout
@@ -318,11 +355,23 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
   completeCalibration() {
     if (this.uiState === 'calibrated') return; // Prevent double execution
 
-    this.stopSensor(); // Stop calibration detection sensor
     this.uiState = 'calibrated';
     this.errorMessageCompass = null; // Clear any previous messages
     console.log('Calibration complete, starting compass display.');
-    this.startCompassDisplay(); // Start sensor again for actual compass heading
+    if (this.sensor && this.isSensorActive) {
+      // Keep the calibrated sensor running. Restarting it here makes its
+      // orientation estimate converge again after the compass is displayed.
+      this.resetHeadingReadiness();
+      this.previousHeading = null;
+      this.accumulatedRotation = 0;
+      this.isQiblaAligned = false;
+      if (this.sensorSubscription) this.sensor.removeEventListener('reading', this.sensorSubscription);
+      this.sensorSubscription = () => this.handleCompassReading();
+      this.sensor.addEventListener('reading', this.sensorSubscription);
+      this.handleCompassReading();
+    } else {
+      this.startCompassDisplay();
+    }
   }
 
   // --- Compass Display Logic ---
@@ -330,11 +379,14 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
   startCompassDisplay() {
     try {
       this.stopSensor(); // Ensure any previous sensor is stopped
+      this.resetHeadingReadiness();
+      // Clear the old heading before starting; the first reading sets the
+      // initial rotation before the dial is added to the page.
+      this.accumulatedRotation = 0;
+      this.previousHeading = null;
+      this.isQiblaAligned = false;
 
-      this.sensor = new AbsoluteOrientationSensor({
-        frequency: 60,
-        referenceFrame: 'screen',
-      });
+      this.sensor = this.createCompassSensor();
 
       // *** Assign the CORRECT handler for compass display ***
       this.sensorSubscription = () => this.handleCompassReading();
@@ -351,9 +403,6 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
 
       this.sensor.start();
       this.isSensorActive = true;
-      // Reset rotation accumulation for fresh display
-      this.accumulatedRotation = 0;
-      this.previousHeading = null;
       console.log('Sensor started for compass display.');
     } catch (error: any) {
       console.error('Error initializing compass display:', error);
@@ -368,16 +417,26 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
     }
 
     const [x, y, z, w] = this.sensor.quaternion;
+    if (![x, y, z, w].every(Number.isFinite) || Math.abs(Math.hypot(x, y, z, w) - 1) > 0.01) {
+      this.ngZone.run(() => { this.resetHeadingReadiness(); this.isQiblaAligned = false; });
+      return;
+    }
 
     // Project the screen's top edge onto the horizontal plane. Euler yaw
     // describes the other axis and introduces bearing errors when tilted.
+    const native = this.sensor instanceof NativeCompassSensor;
     const east = 2 * (x * y - w * z);
     const north = 1 - 2 * (x * x + z * z);
-    if (Math.hypot(east, north) < 0.1) {
-      this.ngZone.run(() => { this.isQiblaAligned = false; });
+    if (!native && (!Number.isFinite(east) || !Number.isFinite(north) || Math.hypot(east, north) < 0.1)) {
+      this.ngZone.run(() => { this.resetHeadingReadiness(); this.isQiblaAligned = false; });
       return; // Top edge is nearly vertical; its azimuth is undefined.
     }
-    const yaw = (Math.atan2(east, north) * 180 / Math.PI + 360) % 360;
+    const measuredHeading = native ? this.sensor.heading : (Math.atan2(east, north) * 180 / Math.PI + 360) % 360;
+    if (measuredHeading === null || !Number.isFinite(measuredHeading)) {
+      this.ngZone.run(() => { this.resetHeadingReadiness(); this.isQiblaAligned = false; });
+      return;
+    }
+    const yaw = (measuredHeading + this.magneticDeclination + 360) % 360;
 
     // Use NgZone.run to ensure Angular updates the UI from sensor events
     this.ngZone.run(() => {
@@ -407,8 +466,40 @@ export class QiblaCompassComponent implements OnInit, OnDestroy {
       // --- Original Accumulated Rotation Logic END ---
 
       this.displayHeading = this.compassHeading; // Update the text display value
+      this.headingAccuracy = native && this.sensor.headingAccuracy !== null &&
+        Number.isFinite(this.sensor.headingAccuracy) && this.sensor.headingAccuracy >= 0
+        ? this.sensor.headingAccuracy : null;
+      // Quality belongs to this exact native reading. Reevaluate continuously
+      // so magnetic interference hides the arrow again, without any timer.
+      this.headingValid = !native || this.nativeReadingAccurate();
       this.checkQiblaAlignment(); // Check if pointing towards Qibla
     });
+  }
+
+  private resetHeadingReadiness(): void {
+    this.headingValid = false;
+    this.headingAccuracy = null;
+  }
+
+  private nativeReadingAccurate(): boolean {
+    const error = this.sensor.headingAccuracy;
+    return this.sensor.accuracy === 3 && (error === null ||
+      (Number.isFinite(error) && error >= 0 && error <= MAX_HEADING_ERROR_DEGREES));
+  }
+
+  get usesNativeCompass(): boolean {
+    return Capacitor.getPlatform() === 'android';
+  }
+
+  private createCompassSensor(): any {
+    return this.usesNativeCompass ? new NativeCompassSensor() :
+      new AbsoluteOrientationSensor({ frequency: 60, referenceFrame: 'screen' });
+  }
+
+  get compassReady(): boolean {
+    return this.headingValid && !this.locationLoading &&
+      this.qiblaHeading !== null && Number.isFinite(this.qiblaHeading) &&
+      this.previousHeading !== null && Number.isFinite(this.previousHeading);
   }
 
   get turnDegrees(): number {

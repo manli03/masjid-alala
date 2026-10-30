@@ -1,4 +1,10 @@
-import { NgZone } from '@angular/core';
+import { NgZone, NO_ERRORS_SCHEMA } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { AlertController, Platform } from '@ionic/angular';
+import { Subject } from 'rxjs';
+import { QiblaService } from '../../services/qibla.service';
+import { NativeCompassSensor } from '../../../../core/native/compass-sensor';
 import { QiblaCompassComponent } from './qibla-compass.component';
 describe('QiblaCompassComponent heading', () => {
   let component: QiblaCompassComponent;
@@ -94,6 +100,180 @@ describe('QiblaCompassComponent heading', () => {
   });
 });
 
+describe('QiblaCompassComponent initial arrow rendering', () => {
+  let fixture: ComponentFixture<QiblaCompassComponent>;
+  let component: QiblaCompassComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      declarations: [QiblaCompassComponent],
+      imports: [CommonModule],
+      providers: [
+        { provide: AlertController, useValue: {} },
+        { provide: Platform, useValue: { resume: new Subject<void>() } },
+        { provide: QiblaService, useValue: {} },
+      ],
+      schemas: [NO_ERRORS_SCHEMA],
+    }).compileComponents();
+    fixture = TestBed.createComponent(QiblaCompassComponent);
+    component = fixture.componentInstance;
+    spyOnProperty(component, 'usesNativeCompass', 'get').and.returnValue(true);
+    fixture.detectChanges();
+    component.uiState = 'calibrated';
+  });
+
+  function reading(heading: number, accuracy = 3, headingAccuracy: number | null = 2) {
+    const angle = -heading * Math.PI / 360;
+    const sensor = new NativeCompassSensor({} as any);
+    sensor.quaternion = [0, 0, Math.sin(angle), Math.cos(angle)];
+    sensor.heading = heading;
+    sensor.accuracy = accuracy;
+    sensor.headingAccuracy = headingAccuracy;
+    (component as any).sensor = sensor;
+    component.handleCompassReading();
+  }
+
+  it('inserts the dial at the measured angle instead of animating from zero', () => {
+    component.qiblaHeading = 292.5;
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.compass-dial')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.compass-loading')).not.toBeNull();
+
+    reading(90);
+    fixture.detectChanges();
+    const dial = fixture.nativeElement.querySelector('.compass-dial') as HTMLElement;
+    expect(dial.style.transform).toBe('rotate(-90deg)');
+    expect(dial.querySelector<HTMLElement>('.qibla-pointer')!.style.transform).toBe('rotate(292.5deg)');
+    expect(fixture.nativeElement.querySelector('.compass-loading')).toBeNull();
+    // Subsequent readings update the same dial, preserving smooth tracking.
+    reading(91);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.compass-dial')).toBe(dial);
+  });
+
+  it('waits for the location bearing too and hides the dial during a refresh', () => {
+    reading(120);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.qibla-pointer')).toBeNull();
+    component.qiblaHeading = 293;
+    component.locationLoading = true;
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.compass-dial')).toBeNull();
+    component.locationLoading = false;
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.compass-dial')).not.toBeNull();
+    component.resetCompassState();
+    component.uiState = 'calibrated';
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.compass-dial')).toBeNull();
+  });
+
+  it('does not reveal an arrow for invalid sensor data', () => {
+    component.qiblaHeading = 293;
+    (component as any).sensor = { quaternion: [NaN, 0, 0, 1] };
+    component.handleCompassReading();
+    fixture.detectChanges();
+    expect(component.previousHeading).toBeNull();
+    expect(fixture.nativeElement.querySelector('.compass-dial')).toBeNull();
+  });
+
+  it('shows the corrected heading on the exact reading that reports high accuracy', () => {
+    component.qiblaHeading = 293;
+    for (let i = 0; i < 100; i++) reading(90, 1, 20);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.compass-dial')).toBeNull();
+    reading(180, 2, 8);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.compass-dial')).toBeNull();
+    reading(180, 3, 2);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.compass-dial').style.transform).toBe('rotate(-180deg)');
+  });
+
+  it('hides the arrow immediately if magnetic accuracy degrades and recovers without a wait', () => {
+    component.qiblaHeading = 293;
+    reading(90);
+    expect(component.compassReady).toBeTrue();
+    reading(90, 0, 20);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.compass-dial')).toBeNull();
+    reading(100, 3, 3);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.compass-dial').style.transform).toBe('rotate(-100deg)');
+  });
+
+  it('tracks movement across north without requiring the device to stay still', () => {
+    component.qiblaHeading = 293;
+    reading(359);
+    reading(0);
+    expect(component.compassReady).toBeTrue();
+    reading(30);
+    expect(component.compassReady).toBeTrue();
+  });
+
+  it('uses the reported angular error as well as calibration status', () => {
+    component.qiblaHeading = 293;
+    reading(90, 3, 12);
+    expect(component.compassReady).toBeFalse();
+    reading(90, 3, 5);
+    expect(component.compassReady).toBeTrue();
+    reading(90, 3, NaN);
+    expect(component.compassReady).toBeFalse();
+    reading(90, 3, null);
+    expect(component.compassReady).toBeTrue();
+    expect(component.headingAccuracy).toBeNull();
+  });
+
+  it('shows the GIF while waiting and opens automatically on accurate native data without a Done button', () => {
+    component.qiblaHeading = 293;
+    reading(90, 1, 20);
+    component.uiState = 'calibrating';
+    const sensor = (component as any).sensor as NativeCompassSensor;
+    (component as any).isSensorActive = true;
+    const angles = spyOn(component, 'getEulerAngles');
+    component.handleCalibrationReading();
+    expect(component.uiState).toBe('calibrating');
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.calibration-image').getAttribute('src')).toContain('calibratecompass.gif');
+    expect(fixture.nativeElement.querySelector('.state-panel ion-button')).toBeNull();
+    expect(angles).not.toHaveBeenCalled();
+    sensor.accuracy = 3;
+    sensor.headingAccuracy = 12;
+    component.handleCalibrationReading();
+    expect(component.uiState).toBe('calibrating');
+    expect(angles).not.toHaveBeenCalled();
+    expect(component.compassReady).toBeFalse();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.calibration-image')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.qibla-pointer')).toBeNull();
+    sensor.accuracy = 3;
+    sensor.headingAccuracy = 2;
+    component.handleCalibrationReading();
+    expect(component.uiState).toBe('calibrated');
+    expect(component.compassReady).toBeTrue();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.calibration-image')).toBeNull();
+    expect((component as any).sensor).toBe(sensor);
+    // This test supplies samples directly rather than starting the native API.
+    (component as any).isSensorActive = false;
+  });
+
+  it('applies true-north correction before showing a GPS-based compass', async () => {
+    (TestBed.inject(QiblaService) as any).getTarget = async () => ({ source: 'gps', bearing: 293, latitude: 3, longitude: 101 });
+    let finish!: (value: { degrees: number }) => void;
+    (component as any).nativeCompass = { getDeclination: () => new Promise(resolve => { finish = resolve; }) };
+    reading(90);
+    const load = component.loadCompassResources('gps');
+    await Promise.resolve();
+    expect(component.compassReady).toBeFalse();
+    finish({ degrees: 2 });
+    await load;
+    expect(component.compassHeading).toBe(92);
+    expect(component.trueNorthCorrected).toBeTrue();
+    expect(component.compassReady).toBeTrue();
+  });
+});
+
 describe('QiblaCompassComponent location flow', () => {
   let component: QiblaCompassComponent;
   let getTarget: jasmine.Spy;
@@ -159,6 +339,19 @@ describe('QiblaCompassComponent sensor messages', () => {
     component.ngOnDestroy();
     if (originalSensor === undefined) delete window.AbsoluteOrientationSensor;
     else window.AbsoluteOrientationSensor = originalSensor;
+  });
+  it('keeps the calibrated sensor running instead of restarting its orientation estimate', () => {
+    component.uiState = 'calibrating';
+    component.initializeSensorForCalibration();
+    const sensor = (component as any).sensor;
+    const stop = spyOn(sensor, 'stop');
+    const start = spyOn(sensor, 'start');
+    component.completeCalibration();
+    expect((component as any).sensor).toBe(sensor);
+    expect(stop).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    expect(component.uiState).toBe('calibrated');
+    expect(component.compassReady).toBeFalse();
   });
   it('replaces a system permission-query rejection with the app message', async () => {
     spyOn(navigator.permissions, 'query').and.rejectWith(new Error('Raw browser permission failure'));
